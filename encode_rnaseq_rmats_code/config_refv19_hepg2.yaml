@@ -1,0 +1,18 @@
+genomeFa: /home/u1357/encode/refv19/GRCh37.p13.genome.fa
+genomeGTF: /home/u1357/encode/refv19/gencode.v19.annotation.gtf
+transcriptFa: /home/u1357/RNAseq/refv19/genecode.v19_transcripts.fa
+refDir: /home/u1357/encode/refv19/
+gtfGene: /home/u1357/encode/refv19/gencode.v19.processed.geneInfo.txt
+chrSize: /home/u1357/encode/refv19/hg19.genome
+
+sampleFile: /home/u1357/encode/rnaseq/hepg2/files/hepg2_sample.txt
+fileDir: /home/u1357/encode/rnaseq/hepg2/
+level1: nc
+level2: kd
+
+
+#knownSNP: /home/u1357/encode/dvrFiles/dbsnp_138.hg19.sort.vcf
+#knownEdit: /home/u1357/encode/dvrFiles/known_RES_hg19.txt
+#repeat: /home/u1357/encode/dvrFiles/hg19.fa.out.txt
+#anoGene: /home/u1357/encode/dvrFiles/hg19_annotation.bed
+#cell: hepg2

@@ -1,0 +1,1678 @@
+---
+title: "AS-NMD analyses"
+author: "Zhang Yangjun"
+date: "2026-01-01"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+**Libararies**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+library(ggplot2)
+library(ggpubr)
+library(VennDiagram)
+library(stringr)
+library(dplyr)
+library(magrittr)
+library(tidyr)
+library(survival)
+library(survminer)
+library(ggalluvial)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+## 1. statistic results (related to figure 1)
+**1.1 isoform switching**
+
+```{r include=TRUE, eval=FALSE, cache=TRUE, message=FALSE}
+ase.stat <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/correlation/ase_corrRBPstat.rds")
+
+## gene info
+gtf19bed <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/genecode19_to_bed15.bed",sep="\t")
+gtfName <- c("chr","trStart","trEnd","trName","score","strand","cdsStart","cdsEnd","cdsColor","exonNum","exonLength","exonStartDist","transcript_type","transcript_id","gene_id","gene_name")
+names(gtf19bed) <- gtfName
+gtf19bed$transcript_id <- substr(gtf19bed$transcript_id,1,15)
+  
+## previously processed ase info
+infoAlt1 <- read.csv(file="/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/new_spliceseq_infoADER_altexon_genomeloc.csv")
+infoAlt2 <- read.csv(file="/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/new_spliceseq_infoME_altexon_genomeloc.csv")
+infoAlt2 <- infoAlt2[infoAlt2$exonType=="exon1",]
+infoAlt <- rbind(infoAlt1,infoAlt2)
+names(infoAlt)[2:3] <- c("exStart","exEnd")
+
+exonIn <- read.csv(file="/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/new_spliceseq_altexon_inloc_transcriptloc.csv")
+exonOut <- read.csv(file="/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/new_spliceseq_altexon_outloc_transcriptloc.csv")
+exonIn <- merge(exonIn[c("symbol","idType","Strand","splice_type","transcript_id")],infoAlt[,1:3],by="idType")
+exonOut <- merge(exonOut[c("symbol","idType","Strand","splice_type","transcript_id")],infoAlt[,1:3],by="idType")
+
+exonIn$transcript_id <- limma::strsplit2(exonIn$transcript_id, "\\.")[,1]
+exonOut$transcript_id <- limma::strsplit2(exonOut$transcript_id, "\\.")[,1]
+  
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/result/tcga_ase_all.rds")
+siga <- tcga$idType[!is.na(tcga$idType)]
+exonIna <- exonIn %>% 
+  dplyr::filter(idType %in% siga)
+exonOuta <- exonOut %>% 
+  dplyr::filter(idType %in% siga)
+    
+## data process of splice-In-isoform
+exonIna <- merge(exonIna[,c("symbol","idType","Strand","splice_type","transcript_id","exStart","exEnd")],
+                 gtf19bed[,c("cdsStart","cdsEnd","transcript_type","transcript_id","trName")],
+                 by="transcript_id", all.x=T)
+
+exonIna$type <- ifelse(exonIna$cdsStart==exonIna$cdsEnd,"noncoding",
+                       ifelse(exonIna$exEnd<exonIna$cdsStart,
+                              ifelse(exonIna$Strand=="+","5utr","3utr"),
+                              ifelse(exonIna$exStart>exonIna$cdsEnd,
+                                     ifelse(exonIna$Strand=="+","3utr","5utr"),
+                                     ifelse(exonIna$exStart<exonIna$cdsStart & exonIna$exEnd>exonIna$cdsStart,
+                                            ifelse(exonIna$Strand=="+","5cds","3cds"),
+                                            ifelse(exonIna$exStart>exonIna$cdsStart & exonIna$exEnd<exonIna$cdsEnd,"cds",
+                                                   ifelse(exonIna$exStart<exonIna$cdsEnd & exonIna$exEnd>exonIna$cdsEnd,
+                                                          ifelse(exonIna$Strand=="+","3cds","5cds"),"NA"))))))
+exonIna$cds <- paste(exonIna$cdsStart,exonIna$cdsEnd,sep=":")
+
+## data process of splice-Out-isoform
+exonOuta <- merge(exonOuta[,c("symbol","idType","Strand","splice_type","transcript_id","exStart","exEnd")],
+                  gtf19bed[,c("cdsStart","cdsEnd","transcript_type","transcript_id","trName")],
+                  by="transcript_id",all.x=T)
+
+exonOuta$type <- ifelse(exonOuta$cdsStart==exonOuta$cdsEnd,"noncoding",
+                        ifelse(exonOuta$exEnd<exonOuta$cdsStart,
+                               ifelse(exonOuta$Strand=="+","5utr","3utr"),
+                               ifelse(exonOuta$exStart>exonOuta$cdsEnd,
+                                      ifelse(exonOuta$Strand=="+","3utr","5utr"),
+                                      ifelse(exonOuta$exStart>exonOuta$cdsStart & exonOuta$exEnd<exonOuta$cdsEnd,
+                                             "cds","NA"))))
+exonOuta$cds <- paste(exonOuta$cdsStart,exonOuta$cdsEnd,sep=":")
+
+exonIna$altExonLen <- exonIna$exEnd-exonIna$exStart
+exonInaSlt <- exonIna %>% dplyr::select(-c("exStart", "exEnd", "cdsStart", "cdsEnd"))
+exonOutaSlt <- exonOuta %>% dplyr::select(-c("exStart", "exEnd", "cdsStart", "cdsEnd"))
+names(exonInaSlt)[c(1,seq(5,9))] <- paste(names(exonInaSlt)[c(1,seq(5,9))],"In",sep="")
+names(exonOutaSlt)[c(1,seq(5,9))] <- paste(names(exonOutaSlt)[c(1,seq(5,9))],"Out",sep="")
+
+# InOutAll <- T
+exonInOuta <- merge(exonInaSlt,exonOutaSlt[,c(1,3,seq(5,9))],by="idType", all=F) 
+typename <- c("nonsense_mediated_decay","processed_transcript","protein_coding","retained_intron")
+exonInOuta <- exonInOuta[exonInOuta$transcript_typeIn%in%typename & exonInOuta$transcript_typeOut%in%typename,]
+  
+exonInOuta <- exonInOuta %>% 
+  dplyr::mutate(splice_type=ifelse(is.na(splice_typeIn), splice_typeOut, splice_typeIn))
+# saveRDS(exonInOuta, file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/correlation/as_tr_loc_sanky_top0_InOutAllFALSE_new.rds")
+
+```
+
+
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+exonInOuta <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/correlation/as_tr_loc_sanky_top0_InOutAllFALSE_new.rds")
+## aluuvium
+exonInOuta.stat <- exonInOuta %>% group_by(transcript_typeIn,transcript_typeOut,splice_type) %>% summarise(Freq=n())
+exonInOuta.stat$transcript_typeOut <- paste(exonInOuta.stat$transcript_typeOut,"x",sep="")
+ggplot(data = exonInOuta.stat, aes(axis1 = transcript_typeOut, axis2 = transcript_typeIn, y = Freq)) +
+  scale_x_discrete(limits = c("transcript_typeOut","transcript_typeIn"), expand = c(.01, .05)) +
+  geom_alluvium(aes(fill = splice_type)) +
+  scale_fill_manual(values = c("DarkOrange","Thistle3","Salmon","DodgerBlue","lightgreen","Khaki3","red"))+
+  geom_stratum() + 
+  geom_label(stat = "stratum", aes(label = after_stat(stratum))) +
+  theme_minimal() +
+  ggtitle("AS-transcript switch") +
+  theme(axis.ticks = element_line(color = "black"),
+        panel.grid.major = element_line(color="white",size=0.2,linetype = "dotted"),
+        panel.grid.minor = element_line(color="white",size=0.2,linetype = "dotted"))
+
+
+##
+exonInOuta.statx <- exonInOuta %>% group_by(typeIn,typeOut,splice_type) %>% summarise(Freq=n())
+exonInOuta.statx <- exonInOuta.statx[exonInOuta.statx$typeIn!="NA" & exonInOuta.statx$typeOut!="NA",]
+exonInOuta.statx$typeOut <- paste(exonInOuta.statx$typeOut,"x",sep="")
+ggplot(data = exonInOuta.statx, aes(axis1 = typeOut, axis2 = typeIn, y = Freq)) +
+  scale_x_discrete(limits = c("transcript_typeOut","transcript_typeIn"), expand = c(.01, .05)) +
+  geom_alluvium(aes(fill = splice_type)) +
+  scale_fill_manual(values = c("DarkOrange","Thistle3","Salmon","DodgerBlue","lightgreen","Khaki3","red"))+
+  geom_stratum() + 
+  geom_label(stat = "stratum", aes(label = after_stat(stratum))) +
+  theme_minimal() +
+  ggtitle("AS-exon change related to CDS") +
+  theme(axis.ticks = element_line(color = "black"),
+        panel.grid.major = element_line(color="white",size=0.2,linetype = "dotted"),
+        panel.grid.minor = element_line(color="white",size=0.2,linetype = "dotted"))
+```
+
+
+**1.2 the number of AS events in different groups**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+##### stat of groups #####
+tcga <- readRDS("/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+
+
+## spliceseq
+aseType <- tcga %>% 
+  dplyr::filter(!is.na(idType)) %>% 
+  dplyr::filter(!is.na(aseType)) %>% 
+  group_by(txAnno) %>% 
+  summarise(freq=n()) %>% 
+  arrange(freq)
+
+aseType$txAnno <- factor(aseType$txAnno, levels = rev(aseType$txAnno))
+ggplot(aseType, aes(txAnno, freq, fill=txAnno, colour=txAnno)) + 
+  geom_bar(aes(x=txAnno, y=freq, fill=txAnno),stat="identity", position="stack",width = 0.6, linewidth=0.2)+
+  scale_colour_manual(values = rep("black",6))+
+  scale_fill_manual(values = c("Khaki3","red","DodgerBlue","#CDB5CD","lightgreen", "Salmon"))+
+  scale_y_continuous(labels = scales::label_number())+
+  theme_classic() +
+  theme(axis.text.y= element_text(size=10,color="black"),
+        axis.text.x= element_text(size=10,color="black",angle=90),
+        axis.ticks = element_line(color = "black"),
+        axis.title.x=element_text(size=10,face="bold"),
+        axis.title.y=element_text(size=10,face="bold"),
+        legend.text=element_text(size=10,colour="black"),
+        legend.title=element_text(size=10,face="bold",colour="black"),
+        legend.position="right",
+        strip.background = element_rect(color ="black",size = 0.5,fill = "white"),
+        strip.text = element_text(size=10,face="bold"),
+        panel.grid.major.y = element_line(color="black",size=0.2,linetype = "dotted"))
+```
+
+**1.3 the PSA value of ASEs in different groups**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+## PSI VALUE/spliceseq
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+psi.ss <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/correlation/psi_median_panc_spliceseq.rds")
+psi.ss <- merge(psi.ss, tcga, by="idType")
+
+psi.ss <- psi.ss %>% 
+  dplyr::filter(!is.na(idType)) %>% 
+  dplyr::filter(!is.na(aseType))
+psi.ss$aseType <- factor(psi.ss$aseType, levels = c("Other", "NA_PCD", "PCD_PCD", "PCD_NMD", "PCD_NA", "NMD_PCD"))
+
+## plot ECDF
+plotECDF <- function(psi.ss, splicetype, datatype=""){
+  # psi.ss <- psi.sa
+  if (splicetype!="all"){
+    psi.ss <- psi.ss[psi.ss$spliceType==splicetype,]
+  }
+  
+  if (datatype=="TN"){
+    psi.ss <- psi.ss %>% 
+      dplyr::select(idMap, aseType, tumor, norm) %>% 
+      tidyr::gather(dataType, psi, -c("idMap", "aseType")) %>% 
+      dplyr::mutate(aseType=paste0(aseType, "_", dataType))
+  }else if(datatype%in%c("", "spladder")){
+    psi.ss <- psi.ss %>% 
+      dplyr::mutate(psi=all) 
+  }else if(datatype=="gtex"){
+    psi.ss <- psi.ss %>% 
+      dplyr::mutate(psi=gtex)
+  }
+  
+  psi.ss <- psi.ss %>% 
+    dplyr::filter(!is.na(psi))
+  
+  
+  color <- c("Khaki3","red","DodgerBlue","#CDB5CD","lightgreen", "Salmon", "purple", "black", "red4", "gold", "green4", "navy",  "grey60")
+  ggplot(psi.ss, aes(psi, fill=aseType, colour=aseType)) + 
+    stat_ecdf(size=0.6) +
+    scale_colour_manual(values = color)+
+    labs(x="PSI",y="Cumulative frequency") +
+    theme_bw() +
+    theme(axis.text.y= element_text(size=12,colour="black"),
+          axis.text.x= element_text(size=12,colour="black"),
+          axis.ticks = element_line(color = "black"),
+          axis.title.x=element_text(size=12,colour="black"),
+          axis.title.y=element_text(size=12,colour="black"),
+          legend.text=element_text(size=10,colour="black"),
+          legend.title=element_text(size=10,colour="black"),
+          legend.position="right",
+          panel.border = element_rect(color = "grey30",size=0.5))
+  
+  # outname <- paste0("/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result//spliceseq_psi_ecdf_groups_", splicetype, "_", datatype, ".pdf")
+  # ggsave(outname, width=5, height=4)
+}
+plotECDF(psi.ss, "all")
+plotECDF(psi.ss, "all", "TN")
+plotECDF(psi.ss, "ES")
+
+
+```
+
+\*\* 1.4 the number of cancer/suvival related PCD-NMD AS events in cancers\*\*
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+tcga <- tcga[!is.na(tcga$idType),]
+surv <- read.csv("/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/SpliceSeq_info_Survival.csv")
+diff <- read.csv("/home/u1357/RNAseq/pancan/oncosplicingv3/spliceSeq/SpliceSeq_info_ClinicalAS.csv")
+
+asetype <- "PCD_NMD"
+surv <- surv %>% 
+  dplyr::filter(CI_Type=="overall_survival" & Splice_Event %in% tcga$idType[tcga$aseType==asetype]) %>% 
+  dplyr::mutate(sigType=ifelse(Hazard_Ratio>1, "poor", "favor")) %>% 
+  arrange(Pvalue_HR)
+  
+diff <- diff %>% 
+  dplyr::filter(CI_Type=="sample_type"  & Splice_Event %in% tcga$idType[tcga$aseType==asetype]) %>% 
+  dplyr::mutate(sigType=ifelse(PSI_Difference>0, "up", "dn"))
+  
+  
+## diff & surv events in cancers
+diff_psc_sig <- diff %>% 
+  dplyr::select(Splice_Event, sigType, Cancer_Type, Splice_Type) %>% 
+  dplyr::rename(idType=Splice_Event, cancerType=Cancer_Type, spliceType=Splice_Type) %>% 
+  dplyr::mutate(mg = paste0(cancerType, "_" ,idType))
+  
+  
+surv_psc_sig <- surv %>% 
+  dplyr::select(Splice_Event, sigType, Cancer_Type, Splice_Type) %>% 
+  dplyr::rename(idType=Splice_Event, cancerType=Cancer_Type, spliceType=Splice_Type) %>% 
+  dplyr::mutate(mg = paste0(cancerType, "_" ,idType))
+  
+diff_psc_sigX <- merge(diff_psc_sig, 
+                       surv_psc_sig[,c("mg", "sigType")] %>% dplyr::rename(sigSurv=sigType), 
+                       by = "mg", all.x=T)
+  
+diff_psc_sigX <- diff_psc_sigX %>% mutate(sigSurv=ifelse(is.na(sigSurv), "nosig", sigSurv))
+  
+  
+result <- diff_psc_sigX %>% 
+  group_by(cancerType, sigType, sigSurv) %>% 
+  summarise(freq=n()) %>% 
+  mutate(freq = ifelse(sigType=="dn", -freq, freq),
+         survType = paste(sigType, sigSurv, sep="_"),
+         cancerType = gsub("TCGA-","",cancerType))
+
+result$sigSurv <- factor(result$sigSurv, levels = c("nosig","favor", "poor"))
+  
+result.stat <- result %>% 
+  group_by(cancerType, sigType) %>% 
+  summarise(freq=sum(freq))
+laby <- max(result.stat$freq)
+  
+##
+efs <- laby/100
+if (efs<1){
+  breaks <- 10
+}else{
+  breaks <- 100
+}
+  
+limit <- laby
+labs <- laby%/%breaks*breaks
+  
+ggplot(result, aes(cancerType, freq, fill=sigSurv, colour=sigSurv)) + 
+  geom_bar(aes(x=cancerType, fill=sigSurv),stat="identity", position="stack",width = 0.6, size=0.2)+
+  labs(x="",y="Frequence", title = paste0("Differential analysis of ", asetype, "ASEs")) +
+  scale_y_continuous(limits=c(-limit,limit),breaks = seq(-labs,labs,breaks), labels =       abs(seq(-labs,labs,breaks)),position="left") +
+  scale_colour_manual(values = rep("black",4))+
+  scale_fill_manual(values=c("grey90", "Salmon", "DodgerBlue")) +
+  theme_classic() +
+  geom_hline(yintercept = 0, size = 0.4, color="black") +
+  annotate("text", label = "Down-regulated",x=4,y=-laby) +
+  annotate("text", label = "Up-regulated",x=4,y= laby) +
+  theme(axis.text.y= element_text(size=10,color="black"),
+        axis.text.x= element_text(size=10,color="black",angle=90),
+        axis.ticks = element_line(color = "black"),
+        axis.title.x=element_text(size=10,face="bold"),
+        axis.title.y=element_text(size=10,face="bold"),
+        legend.text=element_text(size=10,colour="black"),
+        legend.title=element_text(size=10,face="bold",colour="black"),
+        legend.position="right",
+        strip.background = element_rect(color ="black",size = 0.5,fill = "white"),
+        strip.text = element_text(size=10,face="bold"),
+        panel.grid.major.y = element_line(color="black",size=0.2,linetype = "dotted"))
+```
+
+## 2. relative locations of motifs enriched in structured AS events (related to figure 2)
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+files <- list.files("/home/u1357/RNAseq/pancan/oncosplicingv3/motifEnrich/results/nmdByRBPs/", pattern = "*pval.filter.txt$", recursive = T, full.names = T)
+res <- lapply(files, read.table, sep="\t", header=T)
+names(res) <- gsub(".*([n,p]cor).*","\\1", files)
+res <- res %>% purrr::keep(function(x) nrow(x)>0)
+
+for (i in 1:length(res)){
+  res[[i]] <- res[[i]] %>% 
+    dplyr::mutate(corrType=names(res)[i])
+}
+res <- do.call(rbind, res)
+
+termFilter <- unique(res$term[res$pValue> -log10(0.001)])
+result <- res %>% 
+  dplyr::filter(spliceType=="ES" & pValue> -log10(0.001)) %>% 
+  dplyr::mutate(pValue=ifelse(corrType=="pcor", -pValue, pValue)) %>% 
+  dplyr::select(RBPmotifId, regionBinLoc, pValue) %>% 
+  tidyr::spread(regionBinLoc, pValue, fill=0) %>% 
+  as.data.frame()
+row.names(result) <- result$RBPmotifId
+result <- result[,-1]
+
+checks <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/rmaps3/check_region_site.rds")
+checks <- limma::strsplit2(checks, split="\\.")
+checks <- checks[,2][checks[,1]=="ES"]
+checks <- checks[order(checks)]
+checkNO <- checks[!checks%in%names(result)]
+result[,checkNO] <- 0
+result <- result[,checks]
+
+
+columnTitle <- c("50", "S", "250", "250", "S", "50", "50", "S", "250", "250", "S", "50")
+fillColor <- gsub("50","green4", gsub("250", "grey90", gsub("S", "red",columnTitle)))
+
+# pdfFile <- "/home/u1357/RNAseq/pancan/oncosplicingv3/motifEnrich/results/nmdByRBPs/pan_rbp.pdf"
+# pdf(file=pdfFile, width=ncol(result)*0.15, height=nrow(result)*0.2+1.5)
+title <- columnTitle
+split <- limma::strsplit2(colnames(result), split = "[0-9]{2}$")[,1]
+col_fun2 = colorRamp2(c(-300, -10, -4, log(0.05, 10), 0, -log(0.05, 10), 4, 10, 300), c("green4", "green", "springgreen","white","white","white","Salmon","red","red4"))
+Heatmap(result, col = col_fun2, cluster_rows=T,cluster_columns=F,
+               row_title = NULL, column_split = split, column_gap = unit(0, "mm"), border = T,
+               column_title = title, column_title_gp = gpar(fill = fillColor, fontsize=15, fontface="italic"),
+               column_title_side = "bottom", 
+               show_row_names = T,rect_gp = gpar(col = NA), show_column_dend = F,
+               show_row_dend = F, show_column_names = T,
+               heatmap_legend_param = list(title = "-log10(FDR)"))
+# dev.off()
+
+
+
+```
+
+## 3. the relationshi between PCD-NMD AS events & repeative elements (related to figure 3)
+
+**3.1 data process**
+
+```{r include=TRUE, eval=FALSE, cache=TRUE, message=FALSE}
+## data pre-process
+if (F){
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all.rds")
+
+##### 3.1 bed generate and intersect #####
+#
+tcga <- tcga %>% 
+  dplyr::mutate(fromTo=paste0(start, ":", end))
+
+#
+tcgaME <- tcga[tcga$spliceType=="ME",] %>% 
+  dplyr::mutate(alterExon1 = limma::strsplit2(eventRegion, split="-")[,ifelse(strand=="+", 2, 3)],
+                alterExon2 = limma::strsplit2(eventRegion, split="-")[,ifelse(strand=="+", 3, 2)],
+                intron1 = limma::strsplit2(eventRegion, split=":")[,ifelse(strand=="+", 2, 4)],
+                intron2 = limma::strsplit2(eventRegion, split=":")[,3],
+                intron3 = limma::strsplit2(eventRegion, split=":")[,ifelse(strand=="+", 4, 2)]) %>% 
+  dplyr::select(chr, strand, idMap, alterExon1, alterExon2, intron1, intron2, intron3, fromTo) %>% 
+  tidyr::gather(regionType, startEnd, -seq(3))
+
+#
+tcgaRI <- tcga[tcga$spliceType=="IR",] %>% 
+  dplyr::mutate(alterExon=limma::strsplit2(eventRegion, split="-")[,2],
+                intron=limma::strsplit2(eventRegion, split="-")[,2]) %>% 
+  dplyr::select(chr, strand, idMap, alterExon, intron, fromTo) %>% 
+  tidyr::gather(regionType, startEnd, -seq(3))
+
+#
+tcgaES <- tcga[tcga$spliceType=="ES",] %>% 
+  dplyr::mutate(alterExon = limma::strsplit2(eventRegion, split="-")[,2],
+                intron1 = limma::strsplit2(eventRegion, split=":")[,ifelse(strand=="+", 2, 3)],
+                intron2 = limma::strsplit2(eventRegion, split=":")[,ifelse(strand=="+", 3, 2)]) %>% 
+  dplyr::select(chr, strand, idMap, alterExon, intron1, intron2, fromTo) %>% 
+  tidyr::gather(regionType, startEnd, -seq(3))
+
+#
+tcgaA3 <- tcga[tcga$spliceType=="A3",] %>% 
+  dplyr::mutate(alterExon = limma::strsplit2(eventRegion, split="-")[,2],
+                intron = limma::strsplit2(eventRegion, split=":")[,ifelse(strand=="+", 2, 3)]) %>% 
+  dplyr::select(chr, strand, idMap, alterExon, intron, fromTo) %>% 
+  tidyr::gather(regionType, startEnd, -seq(3))
+
+#
+tcgaA5 <- tcga[tcga$spliceType=="A5",] %>% 
+  dplyr::mutate(alterExon = limma::strsplit2(eventRegion, split="-")[,2],
+                intron = limma::strsplit2(eventRegion, split=":")[,ifelse(strand=="+", 3, 2)]) %>% 
+  dplyr::select(chr, strand, idMap, alterExon, intron, fromTo) %>% 
+  tidyr::gather(regionType, startEnd, -seq(3))
+
+
+tcgaAll <- rbind(tcgaME, tcgaRI, tcgaES, tcgaA3, tcgaA5) %>% 
+  dplyr::mutate(start=limma::strsplit2(startEnd, split="[-,:]")[,1],
+                end=limma::strsplit2(startEnd, split="[-,:]")[,2]) %>% 
+  dplyr::select(chr, start, end, idMap, regionType, strand)
+tcgaAll <- tcgaAll[tcgaAll$start<tcgaAll$end,]  
+
+tcgaFile <- "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/tcga_ase_all.bed"
+# write.table(tcgaAll, file=tcgaFile, sep="\t", row.names = F, col.names = F, quote = F)
+
+# teFile <- "/home/u1357/RNAseq/repeats/repeat_processed.bed"
+# outFile1 <- "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps.txt"
+# outFile2 <- "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps_antiS.txt"
+# 
+# cmd1 <- paste0("/pub/anaconda3/bin/bedtools intersect -a ", tcgaFile, " -b ", teFile, " -wo -s >", outFile1)
+# cmd2 <- paste0("/pub/anaconda3/bin/bedtools intersect -a ", tcgaFile, " -b ", teFile, " -wo -S >", outFile2)
+# 
+# system(cmd1)
+# system(cmd2)
+
+
+##### 3.2 load intersect result & filtering #####
+ovlp <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps.txt",sep="\t",header=F)[,-c(7,12)]
+ovlps <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps_antiS.txt",sep="\t",header=F)[,-c(7,12)]
+name <- c("chr","aseStart0","aseEnd","idMap","regionType","strand","repStart0","repEnd","repID","repName","ovlapLen")
+names(ovlp) <- names(ovlps) <- name
+ovlp$senseType <- "sense"
+ovlps$senseType <- "antisense"
+ovlps <- rbind(ovlp, ovlps)
+
+
+
+##### 3.3 filter RE ##### 
+te <- read.table("/home/u1357/RNAseq/refv19/rmsk.txt",header=F,sep="\t")
+name <- c("bin","swScore","milliDiv","milliDel","milliIns","genoName","genoStart","genoEnd","genoLeft",
+          "strand","repName","repClass","repFamily","repStart",	"repEnd",	"repLeft","id")
+colnames(te) <- name
+
+class <- c("SINE", "LINE", "LTR", "DNA", "Low_complexity", "Simple_repeat")
+teFilter <- te %>% 
+  dplyr::filter(repClass %in% class) %>% 
+  dplyr::filter(!grepl("\\?",repClass)) %>% 
+  dplyr::filter(!grepl("\\?",repFamily)) %>% 
+  dplyr::filter(!grepl("_",genoName)) %>% 
+  dplyr::mutate(repID = paste(genoName, strand, genoStart, genoEnd, repName, sep="_"))
+
+# saveRDS(teFilter, file="/home/u1357/RNAseq/refv19/te_filter_top6class.rds")
+
+
+
+##### 3.4 merge ##### 
+result <- merge(ovlps, teFilter[,c("repClass", "repFamily", "repID")], by="repID")
+result <- result %>% 
+  dplyr::mutate(aseLen=aseEnd-aseStart0,
+                repLen=repEnd-repStart0,
+                overType=ifelse(ovlapLen==aseLen, "RepCoverASE",
+                                ifelse(ovlapLen==repLen, "aseCoverRep", "crossOver")))
+table(result$overType)
+# saveRDS(result, file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps_merge_filter.rds")
+
+
+##### 3.5 annotation tcga ases #####
+result <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps_merge_filter.rds")
+result.altexon.stat <- result %>% 
+  dplyr::filter(regionType%in%c("alterExon", "alterExon1", "alterExon2")) %>% 
+  dplyr::mutate(alu=ifelse(repFamily=="Alu" & senseType=="antisense", 1, 0),
+                aluSense=ifelse(repFamily=="Alu" & senseType=="sense", 1, 0)) %>% 
+  group_by(idMap) %>% 
+  summarise(freqRep=n(), freqAluS=sum(alu), freqAluSense=sum(aluSense))
+# saveRDS(result.altexon.stat, file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/tcga_ase_repeat_freq_allase.rds")
+
+
+##
+repAS <- result.altexon.stat$idMap[result.altexon.stat$freqRep>0]
+aluAS <- result.altexon.stat$idMap[result.altexon.stat$freqAluS>0]
+aluASense <- result.altexon.stat$idMap[result.altexon.stat$freqAluSense>0]
+
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/result/tcga_ase_all.rds")
+tcga <- merge(tcga, exonInOuta[,c("idMap", "aseType")], by="idMap", all.x=T)
+tcga <- tcga %>% 
+  dplyr::mutate(txAnno=ifelse(is.na(aseType), "notAnno", aseType), 
+                repeatAnno=ifelse(idMap %in% repAS, "yes", "no"),
+                aluAnno=ifelse(idMap %in% aluAS, "yes", "no"))
+# saveRDS(tcga, file="/home/u1357/RNAseq/pancan/oncosplicingv3/result/tcga_ase_all_txAnno_repeatAnno.rds")
+# tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/result/tcga_ase_all_txAnno_repeatAnno.rds")
+
+
+tcga <- tcga %>% 
+  dplyr::mutate(aluSense=ifelse(idMap %in% aluASense, "yes", "no"))
+# saveRDS(tcga, file="/home/u1357/RNAseq/pancan/oncosplicingv3/result/tcga_ase_all_txAnno_repeatAnno.rds")
+}
+```
+
+**3.2 stat & plot: te statistics**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+## stat & plot 1
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+ase.ss <- tcga$idMap[!is.na(tcga$idType)]
+
+result <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/ase_repeat_overlaps_merge_filter.rds")
+result.spliceseq <- result %>% 
+  dplyr::filter(idMap %in% ase.ss)
+
+teFilter <- readRDS(file="/home/u1357/RNAseq/refv19/te_filter_top6class.rds")
+## all events region
+result.fromTo <- result.spliceseq %>% 
+  dplyr::filter(regionType=="fromTo") %>% 
+  group_by(idMap, senseType) %>% 
+  summarise(freq=n())
+
+nASEs <- length(unique(result.fromTo$idMap))
+# length(unique(result.fromTo$idMap))/length(ase.ss)
+message("unique ASEs mapping TEs in their full region:", nASEs)
+
+
+result.fromTo.rep <- result.spliceseq %>% 
+  dplyr::filter(regionType=="fromTo") %>% 
+  group_by(repID, senseType) %>% 
+  summarise(freq=n())
+nTEs <- nrow(result.fromTo.rep)
+# nrow(result.fromTo.rep)/nrow(teFilter)
+message("unique TEs mapping with ASE in full region:", nTEs)
+
+
+## regulated exon
+result.altexon <- result.spliceseq %>% 
+  dplyr::filter(regionType%in%c("alterExon", "alterExon1", "alterExon2")) %>% 
+  group_by(idMap, senseType) %>% 
+  summarise(freq=n())
+
+nASEs <- length(unique(result.altexon$idMap))
+message("unique ASEs mapping TEs in alternate exon:", nASEs)
+
+
+result.altexon.rep <- result.spliceseq %>% 
+  dplyr::filter(regionType%in%c("alterExon", "alterExon1", "alterExon2")) %>% 
+  group_by(repID, senseType) %>% 
+  summarise(freq=n())
+
+nTEs <- nrow(result.altexon.rep)
+message("unique TEs mapping with ASE in alternate exon:", nTEs)
+
+## stat
+result.altexon.stat <- result.spliceseq %>%
+  dplyr::filter(regionType%in%c("alterExon", "alterExon1", "alterExon2")) %>% 
+  dplyr::mutate(spliceType=limma::strsplit2(idMap, split = "\\|")[,2]) %>% 
+  group_by(spliceType, repClass, senseType) %>%
+  summarise(freq=n()) %>% 
+  group_by(spliceType, senseType) %>% 
+  dplyr::mutate(all=sum(freq),
+                pct=round(100*freq/all,2),
+                pct=ifelse(senseType=="sense", pct, -pct),
+                freq=ifelse(senseType=="sense", freq, -freq))
+
+
+ggplot(result.altexon.stat, aes(spliceType, freq, fill=repClass, colour=repClass)) + 
+  geom_bar(aes(x=spliceType, y=freq, fill=repClass),stat="identity", position="stack",width = 0.6, size=0.2)+
+  # scale_y_continuous(limits=c(-3600, 3600), breaks = seq(-3000, 3000, 1000)) +
+  scale_colour_manual(values = rep("black",6))+
+  scale_fill_manual(values = c("Khaki3","#CDB5CD","red","DodgerBlue","lightgreen", "Salmon"))+
+  theme_classic() +
+  geom_hline(yintercept = 0, size = 0.4, color="black") +
+  annotate("text", label = "Antisense",x=2,y=-1500) +
+  annotate("text", label = "Sense",x=2,y= 1500) +
+  theme(axis.text.y= element_text(size=10,color="black"),
+        axis.text.x= element_text(size=10,color="black",angle=90),
+        axis.ticks = element_line(color = "black"),
+        axis.title.x=element_text(size=10,face="bold"),
+        axis.title.y=element_text(size=10,face="bold"),
+        legend.text=element_text(size=10,colour="black"),
+        legend.title=element_text(size=10,face="bold",colour="black"),
+        legend.position="right",
+        strip.background = element_rect(color ="black",size = 0.5,fill = "white"),
+        strip.text = element_text(size=10,face="bold"),
+        panel.grid.major.y = element_line(color="black",size=0.2,linetype = "dotted"))
+
+##
+teFilter.stat <- teFilter %>% 
+  group_by(repClass) %>% 
+  summarise(freq=n()) %>% 
+  dplyr::mutate(all=sum(freq),
+                pct=round(100*freq/all,2),
+                spliceType="all",
+                senseType="sense") %>% 
+  dplyr::select(spliceType, repClass, senseType, freq, all, pct)
+
+teFilter.stat <- rbind(teFilter.stat, teFilter.stat %>% dplyr::mutate(senseType="antisense", pct=-pct))
+result.altexon.stat.pct <- rbind(result.altexon.stat, teFilter.stat)
+result.altexon.stat.pct$spliceType <- factor(result.altexon.stat.pct$spliceType, levels = c("all", "A3", "A5", "ES", "IR", "ME"))
+
+ggplot(result.altexon.stat.pct, aes(spliceType, pct, fill=repClass, colour=repClass)) + 
+  geom_bar(aes(x=spliceType, y=pct, fill=repClass),stat="identity", position="stack",width = 0.6, size=0.2)+
+  scale_y_continuous(limits=c(-101, 101), breaks = seq(-100, 100, 25)) +
+  scale_colour_manual(values = rep("black",6))+
+  scale_fill_manual(values = c("Khaki3","#CDB5CD","red","DodgerBlue","lightgreen", "Salmon"))+
+  theme_classic() +
+  geom_hline(yintercept = 0, size = 0.4, color="black") +
+  annotate("text", label = "Antisense",x=2,y=-100) +
+  annotate("text", label = "Sense",x=2,y= 100) +
+  theme(axis.text.y= element_text(size=10,color="black"),
+        axis.text.x= element_text(size=10,color="black",angle=90),
+        axis.ticks = element_line(color = "black"),
+        axis.title.x=element_text(size=10,face="bold"),
+        axis.title.y=element_text(size=10,face="bold"),
+        legend.text=element_text(size=10,colour="black"),
+        legend.title=element_text(size=10,face="bold",colour="black"),
+        legend.position="right",
+        strip.background = element_rect(color ="black",size = 0.5,fill = "white"),
+        strip.text = element_text(size=10,face="bold"),
+        panel.grid.major.y = element_line(color="black",size=0.2,linetype = "dotted"))
+
+```
+
+**3.2 stat & plot: te overlap ES events**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+exonInOuta <- readRDS("/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/te/tcga_ase_isform_switch.rds")
+exonInOuta <- exonInOuta %>% 
+  dplyr::filter(!duplicated(idMap))
+
+exonInOuta.filter <- exonInOuta %>% 
+  dplyr::filter(idMap %in% ase.ss) %>% 
+  dplyr::select(idMap, spliceType) %>% 
+  dplyr::mutate(spliceType=limma::strsplit2(idMap, split="\\|")[,2]) %>% 
+  dplyr::filter(!duplicated(idMap))
+
+exonInOuta.filter <- merge(exonInOuta.filter, tcga[,c("idMap", "aseType")])
+
+result.altexon <- result.spliceseq %>% 
+  dplyr::filter(regionType%in%c("alterExon", "alterExon1", "alterExon2")) %>% 
+  group_by(idMap, senseType) %>% 
+  summarise(freq=n())
+
+##
+dataType <- "spliceseq"
+splicetype <- "ES"
+## stat and plot for grouped ASEs mapping to TEs
+if (splicetype=="all"){
+  spliceTypes <- c("A3", "A5", "IR", "ES", "ME")
+}else(
+  spliceTypes <- splicetype
+)
+result.altexon.type <- result.altexon %>%
+  dplyr::mutate(spliceType=limma::strsplit2(idMap, split="\\|")[,2]) %>%
+  dplyr::filter(spliceType %in% spliceTypes) %>%
+  group_by(idMap) %>%
+  summarise(freq=n(),
+            senseTypes=stringr::str_c(unique(senseType), collapse=", "))
+
+#
+exonInOuta.stat <- exonInOuta.filter %>% 
+  dplyr::filter(spliceType%in%spliceTypes)
+
+#
+result.altexon.type <- merge(result.altexon.type, exonInOuta.stat, by="idMap", all.y=T)
+result.altexon.type.stat <- result.altexon.type %>% 
+  dplyr::mutate(senseTypes=gsub(".*,.*sense$", "both", senseTypes),
+                senseTypes=ifelse(is.na(senseTypes), "none", senseTypes),
+                senseTypes=factor(senseTypes, levels = c("antisense", "both", "sense", "none")))
+
+table(result.altexon.type.stat$senseTypes, result.altexon.type.stat$aseType)
+table(result.altexon.type.stat$senseTypes)
+# 2899 + 181 + 1219
+
+result.altexon.type.stat <- result.altexon.type.stat %>% 
+  group_by(aseType, senseTypes) %>% 
+  summarise(freq=n()) %>% 
+  group_by(aseType) %>% 
+  dplyr::mutate(all=sum(freq),
+                pct=round(100*freq/all,2))
+
+aseType <- result.altexon.type.stat %>% 
+  group_by(aseType) %>% 
+  summarise(freq=sum(freq)) %>% 
+  arrange(freq)
+
+
+result.altexon.type.stat$aseType <- factor(result.altexon.type.stat$aseType, levels = rev(aseType$aseType))
+
+ggplot(result.altexon.type.stat, aes(aseType, freq, fill=senseTypes, colour=senseTypes)) + 
+  geom_bar(aes(x=aseType, y=freq, fill=senseTypes),stat="identity", position="stack",width = 0.6, size=0.2)+
+  scale_colour_manual(values = rep("black",6))+
+  ggplot2::scale_y_continuous(labels = scales::label_number()) +
+  scale_fill_manual(values = c("Khaki3","red","DodgerBlue","#CDB5CD","lightgreen", "Salmon"))+
+  theme_classic() +
+  theme(axis.text.y= element_text(size=10,color="black"),
+        axis.text.x= element_text(size=10,color="black",angle=90),
+        axis.ticks = element_line(color = "black"),
+        axis.title.x=element_text(size=10,face="bold"),
+        axis.title.y=element_text(size=10,face="bold"),
+        legend.text=element_text(size=10,colour="black"),
+        legend.title=element_text(size=10,face="bold",colour="black"),
+        legend.position="right",
+        strip.background = element_rect(color ="black",size = 0.5,fill = "white"),
+        strip.text = element_text(size=10,face="bold"),
+        panel.grid.major.y = element_line(color="black",size=0.2,linetype = "dotted"))
+
+
+##
+ggplot(result.altexon.type.stat, aes(aseType, pct, fill=senseTypes, colour=senseTypes)) + 
+  geom_bar(aes(x=aseType, y=pct, fill=senseTypes),stat="identity", position="stack",width = 0.6, size=0.2)+
+  scale_colour_manual(values = rep("black",6))+
+  scale_fill_manual(values = c("Khaki3","red","DodgerBlue","#CDB5CD","lightgreen", "Salmon"))+
+  theme_classic() +
+  theme(axis.text.y= element_text(size=10,color="black"),
+        axis.text.x= element_text(size=10,color="black",angle=90),
+        axis.ticks = element_line(color = "black"),
+        axis.title.x=element_text(size=10,face="bold"),
+        axis.title.y=element_text(size=10,face="bold"),
+        legend.text=element_text(size=10,colour="black"),
+        legend.title=element_text(size=10,face="bold",colour="black"),
+        legend.position="right",
+        strip.background = element_rect(color ="black",size = 0.5,fill = "white"),
+        strip.text = element_text(size=10,face="bold"),
+        panel.grid.major.y = element_line(color="black",size=0.2,linetype = "dotted"))
+
+```
+
+**3.3 stat & plot: te subfamily overlap ES events**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+
+doublePie <- function(result.spliceseq, sensetype, asetype){
+  
+  result.altexon2 <- result.spliceseq %>% 
+    dplyr::filter(regionType%in%c("alterExon", "alterExon1", "alterExon2")) %>% 
+    dplyr::filter(limma::strsplit2(idMap, split="\\|")[,2]=="ES")
+  
+  if (sensetype!="all"){
+    result.altexon2 <- result.altexon2 %>% 
+      dplyr::filter(senseType %in% sensetype)
+  }
+  
+  if (asetype!="all"){
+    exonInOuta.stat <- exonInOuta.filter %>% 
+      dplyr::filter(spliceType=="ES") %>% 
+      dplyr::filter(aseType %in% asetype)
+    result.altexon2 <- merge(result.altexon2, exonInOuta.stat, by="idMap")
+    minFreq <- 10
+  }else{
+    minFreq <- 20
+  }
+
+  result.altexon2 <- result.altexon2 %>%  
+    dplyr::mutate(repLevel=paste0(repClass, "::", repFamily)) %>%
+    group_by(repLevel) %>% 
+    mutate(repLevel=ifelse(n()<minFreq, "other::other", repLevel)) %>%
+    summarise(freq=n()) %>% 
+    dplyr::mutate(repClass=limma::strsplit2(repLevel, split="::")[,1],
+                  repFamily=limma::strsplit2(repLevel, split="::")[,2],
+                  all=sum(freq))
+  
+  result.altexon2 <- result.altexon2 %>% 
+    group_by(repClass) %>% 
+    dplyr::mutate(freqClass=sum(freq),
+                  pct=round(100*freq/all, 1),
+                  pctClass=round(100*freqClass/all,1),
+                  nf=n()) %>% 
+    ungroup()
+  
+  
+  result.altexon2 <- result.altexon2 %>% 
+    arrange(pctClass, pct) %>% 
+    dplyr::mutate(ymax = cumsum(pct),
+                  ymin=ymax-pct,
+                  lable=paste0(repFamily, " (",pct,"%)"),
+                  lableClass=paste0(repClass, " (",pctClass,"%)"))
+  
+  result.altexon2 <- result.altexon2 %>% 
+    group_by(repClass) %>% 
+    dplyr::mutate(ymaxClass=max(ymax),
+                  yminClass=ymaxClass-pctClass)
+  
+  colors <- c("DarkOrange","Thistle3","#E0EEE0","DodgerBlue","lightgreen","#C7E1E7","Khaki3","red", "cyan4","#F0FFF0", "#FFDAB9", "grey90", 
+              "Salmon", "#FFE1FF", "#B22222", "#FFA07A","#6B8E23", "#D3D3D3")
+  ggplot(result.altexon2) + 
+    geom_rect(aes(fill=repClass, ymax=ymax, ymin=ymin, xmax=3, xmin=0)) + 
+    geom_text(aes(1.5, (ymaxClass+yminClass)/2,label = lableClass), size =2.5, color = 'black') +
+    scale_fill_manual(values=colors) +
+    geom_rect(aes(fill=repFamily, ymax=ymax, ymin=ymin, xmax=4, xmin=3)) + 
+    geom_text(aes(3.5, (ymax+ymin)/2, label = lable), size =2.5, color = 'black') +
+    scale_fill_manual(values=colors) +
+    xlim(c(0, 4)) + 
+    labs(title=paste0(sensetype, unique(result.altexon2$all)))+
+    theme_void() +
+    theme(legend.position = 'none') +
+    theme(aspect.ratio=1) +
+    # ggsci::scale_fill_igv() +
+    coord_polar(theta="y")
+}
+
+
+doublePie(result.spliceseq, "sense", "all")
+doublePie(result.spliceseq, "antisense", "all")
+```
+
+## 4. Characteristics comparision between ASE subgroups (related to figure 4)
+
+**4.1 splice strength, exon/intron length, gc content: comparision among different ASE groups**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+tcga <- tcga %>% 
+  dplyr::filter(!is.na(idType)) %>% 
+  dplyr::filter(!is.na(aseType)) %>% 
+  dplyr::filter(spliceType=="ES") %>%
+  dplyr::mutate(txAnno=ifelse(txAnno=="PCD_NMD" & repeatAnno=="yes", paste0(txAnno, "RE"), txAnno))
+
+## intron/exon length
+tcga.len <- tcga %>% 
+  dplyr::mutate(intron1=ifelse(strand=="+", limma::strsplit2(eventRegion, split=":")[,2], limma::strsplit2(eventRegion, split=":")[,3]),
+                intron2=ifelse(strand=="+", limma::strsplit2(eventRegion, split=":")[,3], limma::strsplit2(eventRegion, split=":")[,2]),
+                altexon=limma::strsplit2(eventRegion, split="-")[,2]) %>% 
+  tidyr::gather(exonType, exonLoc, -seq(tcga))
+
+tcga.len <- tcga.len %>% 
+  dplyr::mutate(exonStart=limma::strsplit2(exonLoc, split="[-,:]")[,1],
+                exonEnd=limma::strsplit2(exonLoc, split="[-,:]")[,2],
+                exonLen=as.numeric(exonEnd)-as.numeric(exonStart))
+
+tcga.len <- tcga.len %>% 
+  dplyr::mutate(exonType=factor(exonType, levels = c("intron1", "altexon", "intron2"))) %>%
+  dplyr::mutate(exonLen=log2(exonLen)) %>% 
+  dplyr::mutate(txAnno=factor(txAnno, levels = c("Other", "NA_PCD", "NMD_PCD", "PCD_PCD", "PCD_NMD", "PCD_NMDRE", "PCD_NA")))
+
+ggplot(tcga.len,aes(x=txAnno,y=exonLen,fill=txAnno)) +
+  stat_boxplot(geom = "errorbar",width=0.15,color="grey20")+
+  ggsignif::geom_signif(comparisons = list(c("Other","NA_PCD"),c("Other","NMD_PCD"), c("Other","PCD_PCD"), c("Other","PCD_NMD"),c("Other","PCD_NMDRE"), c("PCD_NMD","PCD_NMDRE"), c("Other","PCD_NA")),
+              test = t.test, map_signif_level =F, y_position = c(20,20.5,21,21.5,22, 20, 22.5), textsize=1,
+              tip_length = c(c(0.02,0.02),c(0.02,0.02),c(0.02,0.02),c(0.02,0.02), c(0.02,0.02), c(0.02,0.02), c(0.02,0.02)),
+              size=0.2,color="black")+
+  geom_boxplot(aes(x=txAnno, y=exonLen,outlier.fill=txAnno), outlier.color = NULL, outlier.shape=21, outlier.size=1, width = 0.5)+
+  scale_fill_manual(values = c("Khaki3", "red","DodgerBlue","#CDB5CD","Salmon","lightgreen", "grey90"))+
+  theme_bw()+
+  facet_grid(.~exonType) + 
+  theme(title=element_text(size=7),
+        legend.position = "right",
+        panel.grid.minor.y = element_line(color="white"),
+        axis.text = element_text(size=6,color="black"),
+        axis.title = element_text(size=6,color="black"))
+
+
+
+## splice strength
+score3 <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/siteScore/tcga_ase_sitescoring_sites3_score.txt", sep="\t", header = F)
+score5 <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/siteScore/tcga_ase_sitescoring_sites5_score.txt", sep="\t", header = F)
+score <- rbind(score3, score5)
+names(score) <- c("idMapSite", "seq", "score") 
+score <- score %>% 
+  dplyr::mutate(idMap=limma::strsplit2(idMapSite, split="::")[,1],
+                site=limma::strsplit2(idMapSite, split="::")[,2])
+
+tcga.score <- merge(score, tcga, by="idMap")
+tcga.score <- tcga.score %>% 
+  dplyr::mutate(site=factor(site, levels = c("s5.1", "s3.1", "s5.2", "s3.2"))) %>% 
+  dplyr::mutate(txAnno=factor(txAnno, levels = c("Other", "NA_PCD", "NMD_PCD", "PCD_PCD", "PCD_NMD", "PCD_NMDRE", "PCD_NA")))
+
+ggplot(tcga.score, aes(x=txAnno,y=score,fill=txAnno)) +
+  stat_boxplot(geom = "errorbar",width=0.15,color="grey20")+
+  ggsignif::geom_signif(comparisons = list(c("Other","NA_PCD"),c("Other","NMD_PCD"), c("Other","PCD_PCD"), c("Other","PCD_NMD"),c("Other","PCD_NMDRE"), c("PCD_NMD","PCD_NMDRE"), c("Other","PCD_NA")),
+              test = t.test, map_signif_level =F, y_position = c(14,15,16,17, 18, 14, 19), textsize=1,
+              tip_length = c(c(0.02,0.02),c(0.02,0.02),c(0.02,0.02),c(0.02,0.02), c(0.02,0.02), c(0.02,0.02), c(0.02,0.02)),
+              size=0.2,color="black")+
+  geom_boxplot(aes(x=txAnno, y=score, outlier.fill=txAnno), outlier.color = NULL, outlier.shape=21, outlier.size=1, width = 0.5)+
+  scale_fill_manual(values = c("Khaki3", "red","DodgerBlue","#CDB5CD","Salmon","lightgreen", "grey90"))+
+  theme_bw()+
+  facet_grid(.~site) + 
+  theme(title=element_text(size=7),
+        legend.position = "none",
+        panel.grid.minor.y = element_line(color="white"),
+        axis.text = element_text(size=6,color="black"),
+        axis.title = element_text(size=6,color="black"))
+
+
+## gc content
+gc <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/siteScore/tcga_ase_rmaps_i250_e50_region_separated_gc.txt",sep="\t", header=F)
+names(gc) <- c("chr","start","end","idMap","exonType","strand","pct_at", "pct_gc", "num_A", "num_C", "num_G", "num_T", "num_N", "num_oth", "seq_len")
+
+gcf <- gc %>% 
+  dplyr::filter(num_N==0 & num_oth==0) %>% 
+  dplyr::select(-seq(1,3), -strand,-num_N, -num_oth, -seq_len)
+
+gcf <- gcf %>% 
+  dplyr::mutate(idMap=limma::strsplit2(idMap, split="::")[,1]) %>% 
+  tidyr::gather(dataType, value, -c(1,2))
+
+tcga.gc <- merge(gcf, tcga, by="idMap")
+df <- tcga.gc %>% 
+  dplyr::filter(dataType=="pct_gc") %>% 
+  dplyr::mutate(txAnno=factor(txAnno, levels = c("Other", "NA_PCD", "NMD_PCD", "PCD_PCD", "PCD_NMD", "PCD_NMDRE", "PCD_NA")))
+
+
+
+ggplot(df, aes(x=txAnno,y=value,fill=txAnno)) +
+  stat_boxplot(geom = "errorbar",width=0.15,color="grey20")+
+  ggsignif::geom_signif(comparisons = list(c("Other","NA_PCD"),c("Other","NMD_PCD"), c("Other","PCD_PCD"), c("Other","PCD_NMD"),c("Other","PCD_NMDRE"), c("PCD_NMD","PCD_NMDRE"), c("Other","PCD_NA")),
+              test = t.test, map_signif_level =F, y_position = c(0.9, 0.93, 0.96, 0.99, 1.02, 0.9, 1.05), textsize=1,
+              tip_length = c(c(0.02,0.02),c(0.02,0.02),c(0.02,0.02), c(0.02,0.02), c(0.02,0.02), c(0.02,0.02), c(0.02,0.02)),
+              size=0.2,color="black")+
+  geom_boxplot(aes(x=txAnno, y=value, outlier.fill=txAnno), outlier.color = NULL, outlier.shape=21, outlier.size=1, width = 0.5)+
+  scale_fill_manual(values = c("Khaki3", "red","DodgerBlue","#CDB5CD","Salmon","lightgreen", "grey90"))+
+  theme_bw()+
+  facet_grid(.~exonType) + 
+  theme(title=element_text(size=7),
+        legend.position = "none",
+        panel.grid.minor.y = element_line(color="white"),
+        axis.text = element_text(size=6,color="black"),
+        axis.title = element_text(size=6,color="black"))
+```
+
+**4.2 splice strength, exon/intron length, gc content: comparision bwtweem ASE with & without RE overlaps**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+if (F){
+  mapas <- readRDS("/home/u1357/RNAseq/pancan/oncosplicingv3/result/mapas_all_notSplitbygene.rds")
+  corr.ss <- mapas %>% dplyr::filter(!is.na(SpliceSeq_Event) & Corr_Cancers>0)
+
+  tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+  tcga <- tcga %>% 
+    dplyr::filter(!is.na(idType)) %>% 
+    dplyr::filter(!is.na(aseType)) %>% 
+    dplyr::filter(spliceType=="ES") %>%
+    dplyr::mutate(txAnno=ifelse(txAnno=="PCD_NMD" & repeatAnno=="yes", paste0(txAnno, "RE"), txAnno))
+  
+  
+  pctPosCutoff <- 0.9
+  corr.ss.filter <- corr.ss %>% 
+    dplyr::filter(Corr_Cancers>=3 & (Pos_Correlations/Corr_Cancers >= pctPosCutoff | Pos_Correlations/Corr_Cancers < (1-pctPosCutoff))) %>% 
+    # dplyr::filter(Splice_Type %in% c("ES", "IR")) %>% 
+    dplyr::mutate(Corr_Type = ifelse(Pos_Correlations/Corr_Cancers >= pctPosCutoff, "pcor", "ncor"),
+                  Corr_Type_ID = ifelse(Pos_Correlations/Corr_Cancers >= pctPosCutoff, 1, -1),
+                  Splice_Type=gsub("A3", "AA", gsub("A5", "AD", gsub("ES", "ES", gsub("IR", "RI", gsub("ME", "ME", Splice_Type))))))
+  
+  ##
+  corr.ss.filter.stat <- corr.ss.filter %>% 
+    dplyr::rename(idMap=Map_Event) %>% 
+    dplyr::group_by(idMap) %>% 
+    summarise(freq=n())
+  
+  
+  tcga <- merge(corr.ss.filter.stat, tcga, by="idMap", all.y = T)
+  
+  tcga <- tcga %>% 
+    dplyr::mutate(freq=ifelse(is.na(freq), 0, freq),
+                  freqType=ifelse(freq>=1, "1", "0"))
+  
+  tcga <- tcga %>%
+    dplyr::mutate(txAnno=ifelse(grepl("PCD_NMD", txAnno), paste0(txAnno, freqType), txAnno))
+  
+  saveRDS(tcga, file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/site_score_nmd_re.reds")
+}
+
+
+
+
+
+tcga <- readRDS(file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/site_score_nmd_re.reds")
+## length
+tcga.len <- tcga %>% 
+  dplyr::mutate(intron1=ifelse(strand=="+", limma::strsplit2(eventRegion, split=":")[,2], limma::strsplit2(eventRegion, split=":")[,3]),
+                intron2=ifelse(strand=="+", limma::strsplit2(eventRegion, split=":")[,3], limma::strsplit2(eventRegion, split=":")[,2]),
+                altexon=limma::strsplit2(eventRegion, split="-")[,2]) %>% 
+  tidyr::gather(exonType, exonLoc, -seq(tcga))
+
+tcga.len <- tcga.len %>% 
+  dplyr::mutate(exonStart=limma::strsplit2(exonLoc, split="[-,:]")[,1],
+                exonEnd=limma::strsplit2(exonLoc, split="[-,:]")[,2],
+                exonLen=as.numeric(exonEnd)-as.numeric(exonStart))
+
+tcga.len <- tcga.len %>% 
+  dplyr::mutate(exonType=factor(exonType, levels = c("intron1", "altexon", "intron2"))) %>%
+  dplyr::mutate(exonLen=log2(exonLen)) %>% 
+  dplyr::mutate(txAnno=factor(txAnno, levels = c("Other", "NA_PCD", "NMD_PCD", "PCD_PCD", "PCD_NMD0", "PCD_NMD1", "PCD_NMDRE0", "PCD_NMDRE1", "PCD_NA")))
+
+comp <- list(c("Other","NA_PCD"),c("Other","NMD_PCD"),c("Other","PCD_PCD"),c("Other","PCD_NMD0"),c("Other","PCD_NMD1"), 
+             c("Other","PCD_NMDRE0"),c("Other","PCD_NMDRE1"), c("Other","PCD_NA"),c("PCD_NMD0","PCD_NMD1"), c("PCD_NMD0","PCD_NMDRE0"), 
+             c("PCD_NMD1","PCD_NMDRE1"),c("PCD_NMDRE0","PCD_NMDRE1"))
+ggplot(tcga.len,aes(x=txAnno,y=exonLen,fill=txAnno)) +
+  stat_boxplot(geom = "errorbar",width=0.15,color="grey20")+
+  ggsignif::geom_signif(comparisons = comp,
+              test = t.test, map_signif_level =F, y_position = c(19.5, 20, 20.5, 21, 21.5, 22, 22.5, 23, 19.5, 20, 20.5, 21), textsize=1.2,
+              tip_length = c(rep(c(0.01,0.01), 12)),
+              size=0.2,color="black")+
+  geom_boxplot(aes(x=txAnno, y=exonLen,outlier.fill=txAnno), outlier.color = NULL, outlier.shape=21, outlier.size=1, width = 0.5)+
+  scale_fill_manual(values = c("Khaki3", "red","DodgerBlue","#CDB5CD","Salmon","lightgreen", "grey90", "orange", "grey60"))+
+  theme_bw()+
+  facet_grid(.~exonType) + 
+  theme(title=element_text(size=6),
+        legend.position = "right",
+        panel.grid.minor.y = element_line(color="white"),
+        axis.text = element_text(size=6,color="black"),
+        axis.title = element_text(size=6,color="black"))
+
+
+
+
+## scoring 
+score3 <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/siteScore/tcga_ase_sitescoring_sites3_score.txt", sep="\t", header = F)
+score5 <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/siteScore/tcga_ase_sitescoring_sites5_score.txt", sep="\t", header = F)
+score <- rbind(score3, score5)
+names(score) <- c("idMapSite", "seq", "score") 
+score <- score %>% 
+  dplyr::mutate(idMap=limma::strsplit2(idMapSite, split="::")[,1],
+                site=limma::strsplit2(idMapSite, split="::")[,2])
+
+tcga.score <- merge(score, tcga, by="idMap")
+tcga.score <- tcga.score %>% 
+  dplyr::mutate(site=factor(site, levels = c("s5.1", "s3.1", "s5.2", "s3.2"))) %>% 
+  dplyr::mutate(txAnno=factor(txAnno, levels = c("Other", "NA_PCD", "PCD_PCD", "PCD_NMD0", "PCD_NMD1", "PCD_NMDRE0", "PCD_NMDRE1", "PCD_NA")))
+
+ggplot(tcga.score, aes(x=txAnno,y=score,fill=txAnno)) +
+  stat_boxplot(geom = "errorbar",width=0.15,color="grey20")+
+  geom_signif(comparisons = list(c("Other","NA_PCD"),c("Other","PCD_PCD"),c("Other","PCD_NMD0"),c("Other","PCD_NMD1"), c("Other","PCD_NMDRE0"),c("Other","PCD_NMDRE1"), c("PCD_NMD0","PCD_NMD1"), c("PCD_NMD0","PCD_NMDRE0"), c("PCD_NMD1","PCD_NMDRE1"),c("PCD_NMDRE0","PCD_NMDRE1")),
+              test = t.test, map_signif_level =F, y_position = c(14, 15,16,17,18,19, 14, 15, 16, 17), textsize=1,
+              tip_length = c(c(0.01,0.01),c(0.01,0.01),c(0.01,0.01),c(0.01,0.01),c(0.01,0.01), c(0.01,0.01), c(0.01,0.01),c(0.01,0.01), c(0.01,0.01), c(0.01,0.01)),
+              size=0.2,color="black")+
+  geom_boxplot(aes(x=txAnno, y=score, outlier.fill=txAnno), outlier.color = NULL, outlier.shape=21, outlier.size=1, width = 0.5)+
+  scale_fill_manual(values = c("Khaki3", "red","DodgerBlue","#CDB5CD","Salmon","lightgreen", "grey90", "orange"))+
+  theme_bw()+
+  facet_grid(.~site) + 
+  theme(title=element_text(size=6),
+        legend.position = "none",
+        panel.grid.minor.y = element_line(color="white"),
+        axis.text = element_text(size=6,color="black"),
+        axis.title = element_text(size=6,color="black"))
+
+
+## gc content
+gc <- read.table("/home/u1357/RNAseq/pancan/oncosplicingv3/siteScore/tcga_ase_rmaps_i250_e50_region_separated_gc.txt",sep="\t", header=F)
+names(gc) <- c("chr","start","end","idMap","exonType","strand","pct_at", "pct_gc", "num_A", "num_C", "num_G", "num_T", "num_N", "num_oth", "seq_len")
+
+gcf <- gc %>% 
+  dplyr::filter(num_N==0 & num_oth==0) %>% 
+  dplyr::select(-seq(1,3), -strand,-num_N, -num_oth, -seq_len)
+
+gcf <- gcf %>% 
+  dplyr::mutate(idMap=limma::strsplit2(idMap, split="::")[,1]) %>% 
+  tidyr::gather(dataType, value, -c(1,2))
+
+tcga.gc <- merge(gcf, tcga, by="idMap")
+df <- tcga.gc %>% 
+  dplyr::filter(dataType=="pct_gc") %>% 
+  dplyr::mutate(txAnno=factor(txAnno, levels = c("Other", "NA_PCD", "NMD_PCD","PCD_PCD", "PCD_NMD0", "PCD_NMD1","PCD_NMDRE0", "PCD_NMDRE1","PCD_NA")))
+
+
+ggplot(df, aes(x=txAnno,y=value,fill=txAnno)) +
+  stat_boxplot(geom = "errorbar",width=0.15,color="grey20")+
+  ggsignif::geom_signif(comparisons = comp,
+              test = t.test, map_signif_level =F, y_position = c(0.9, 0.95, 1, 1.05, 1.1, 1.15, 1.2, 1.25, 0.9, 0.95, 1, 1.05), textsize=1.2,
+              tip_length = c(rep(c(0.01,0.01), 12)),
+              size=0.2,color="black")+
+  geom_boxplot(aes(x=txAnno, y=value, outlier.fill=txAnno), outlier.color = NULL, outlier.shape=21, outlier.size=1, width = 0.5)+
+  scale_fill_manual(values = c("Khaki3", "red","DodgerBlue","#CDB5CD","Salmon","lightgreen","grey90","orange", "grey60"))+
+  theme_bw()+
+  facet_grid(.~exonType) + 
+  theme(title=element_text(size=6),
+        legend.position = "none",
+        panel.grid.minor.y = element_line(color="white"),
+        axis.text = element_text(size=6,color="black"),
+        axis.title = element_text(size=6,color="black"))
+
+```
+
+**4.3 gene enrichment: RE-NMD vs noRE-NMD AS events**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+tcga_nmd <- readRDS(file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/site_score_nmd_re.reds")
+tcga1 <- tcga_nmd %>%
+  dplyr::filter(grepl("PCD_NMD[0,1]", txAnno))
+tcga2 <- tcga_nmd %>%
+  dplyr::filter(grepl("PCD_NMDRE[0,1]", txAnno))
+
+## noRE-NMD
+meta <- read.table(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/nmd/metascape/nmd_ase_noRE_all.txt",sep="\t",header = T)
+meta$Term <- paste(meta$Term,meta$Description,sep="/ ")
+symbols <- data.frame(limma::strsplit2(meta$Symbols,split=","))
+name <- c("Term","Description","LogP")
+meta <- cbind(meta[,name],symbols)
+meta <- meta %>% tidyr::gather(type,geneName,-c("Term","Description","LogP"))
+meta <- meta[meta$geneName!="",names(meta)!="type"]
+
+meta <- merge(meta,tcga1[,c("geneName","txAnno")],by="geneName")
+
+metax <- meta %>% group_by(Term, txAnno) %>% summarise(freq=n())
+meta <- meta[,2:4] %>% group_by(Term,Description,LogP) %>% summarise(sum=n())
+meta <- meta[order(meta$sum,decreasing = F),]
+level <- meta$Term
+meta <- merge(meta, metax,by="Term")
+meta$Term <- factor(meta$Term, level=level)
+
+ggplot(meta, aes(x = Term, y = freq, color = txAnno, fill= -LogP))+
+  geom_bar(stat ="identity",width = 0.6,position = position_dodge(width=0.8))+        
+  scale_color_manual(values = c("blue","red"))+  
+  scale_fill_continuous(low="white", high="#CDB5CD") +
+  coord_flip()+
+  labs(x = "Enriched terms",y = "#Genes", title = "Top 20 pathways of 1008 NMD-noRE-ASEs")+
+  theme_bw() +
+  theme(plot.title = element_text(size = 4),
+        axis.text= element_text(size=4,color="black"),
+        legend.text = element_text(size = 4,color="black"))
+
+
+
+## RE-NMD
+meta <- read.table(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/nmd/metascape/nmd_ase_RE_all.txt",sep="\t",header = T)
+meta$Term <- paste(meta$Term,meta$Description,sep="/ ")
+symbols <- data.frame(limma::strsplit2(meta$Symbols,split=","))
+name <- c("Term","Description","LogP")
+meta <- cbind(meta[,name],symbols)
+meta <- meta %>% tidyr::gather(type,geneName, -c("Term","Description","LogP"))
+meta <- meta[meta$geneName!="",names(meta)!="type"]
+
+meta <- merge(meta,tcga2[,c("geneName","txAnno")],by="geneName")
+# length(unique(meta$geneName))
+
+metax <- meta %>% group_by(Term, txAnno) %>% summarise(freq=n())
+meta <- meta[,2:4] %>% group_by(Term,Description,LogP) %>% summarise(sum=n())
+meta <- meta[order(meta$sum,decreasing = F),]
+level <- meta$Term
+meta <- merge(meta, metax,by="Term")
+meta$Term <- factor(meta$Term, level=level)
+
+ggplot(meta, aes(x = Term, y = freq, color = txAnno, fill= -LogP))+
+  geom_bar(stat ="identity",width = 0.6,position = position_dodge(width=0.8))+        
+  scale_color_manual(values = c("blue","red"))+  
+  scale_fill_continuous(low="white", high="#CDB5CD") +
+  coord_flip()+
+  labs(x = "Enriched terms",y = "#Genes", title = "Top 20 pathways of 773 NMD-RE-ASEs")+
+  theme_bw() +
+  theme(plot.title = element_text(size = 4),
+        axis.text= element_text(size=4,color="black"),
+        legend.text = element_text(size = 4,color="black"))
+
+
+
+```
+
+## 5. AS-NMD in the encode perturb RNA-seq project (related to figure 5)
+
+**5.1 identifing RBPs regulating AS-NMD: data process**
+
+```{r include=TRUE, eval=FALSE, cache=TRUE, message=FALSE}
+filesh <- list.files("/home/u1357/encode/rnaseq/hepg2/rmatsDn", pattern = "total_ase_minJC_10.txt$", full.names = T, recursive = T)
+filesk <- list.files("/home/u1357/encode/rnaseq/k562/rmatsDn", pattern = "total_ase_minJC_10.txt$", full.names = T, recursive = T)
+
+meta <- read.table(file="/home/u1357/encode/rnaseq/metadata_processed.txt",sep="\t",header=T)
+names(meta)[c(1,3, 4)] <- c("exps","cell","target")
+
+tcga <- readRDS("/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+
+fileMerge <- function(fileName, cutdiff=0.1, cutfdr=0.05, meta=NULL){
+  ase <- read.table(file=fileName,sep="\t",header=T)
+  if (cutfdr!=0){
+    ase <- ase %>% 
+      dplyr::filter(abs(IncLevelDifference) > cutdiff & FDR < cutfdr) %>% 
+      dplyr::mutate(aseType = ifelse(IncLevelDifference>0,"sigd","siga")) # nc vs kd
+    
+  }
+  ase <- ase %>% 
+    dplyr::mutate(exps = gsub(".*/(ENCSR.*)/.*", "\\1", fileName),
+                  spliceType=gsub("A3SS", "A3", gsub("A5SS","A5",gsub("SE","ES",gsub("MXE","ME",gsub("RI","IR",spliceType))))),
+                  idMap=paste(geneSymbol, spliceType, eventRegion, sep="|")) %>% 
+    dplyr::select(-idType)
+  
+  if (cutfdr==0){
+    ase <- merge(ase, meta[,c("target","cell","exps")], by="exps")
+  }
+  return(ase)
+}
+
+
+asesigh <- lapply(filesh, fileMerge, 0, 0.05)
+asesigh <- do.call(rbind, asesigh)
+
+asesigk <- lapply(filesk, fileMerge, 0, 0.05)
+asesigk <- do.call(rbind, asesigk)
+
+asesighk <- rbind(asesigh, asesigk)
+
+
+asesighk <- merge(asesighk, meta[,c("target","cell","exps")],by="exps")
+
+asesighk <- merge(asesighk, tcga[, c("idMap","idType", "Splice_Event","txAnno", "repeatAnno", "aluAnno")], by="idMap")
+
+asesighk01 <- asesighk %>% 
+  dplyr::filter(abs(IncLevelDifference)>0.1)
+
+# saveRDS(asesighk01, file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/encode/asesighk_diff01_fdr005_jc10.rds")
+
+```
+
+**5.1 identifing RBPs regulating AS-NMD: plot**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+##
+aseStat <- function(asesighk, txAnno="nmd"){
+  asesighk.stat <- asesighk %>% 
+    group_by(cell, exps, target, aseType) %>% 
+    dplyr::summarise(freq=n()) %>% 
+    tidyr::spread(aseType, freq, fill=0)
+  names(asesighk.stat)[4:5] <- paste0("all", names(asesighk.stat)[4:5])
+  
+  ## 
+  tcga <- readRDS("/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+  if (txAnno=="nmd"){
+    nmd <- tcga[tcga$txAnno=="PCD_NMD", c("idMap", "idType", "Splice_Event")]
+    rep <- tcga[tcga$txAnno=="PCD_NMD" & tcga$repeatAnno=="yes", c("idMap", "idType", "Splice_Event")]
+  }else if(txAnno=="allalu"){
+    rep <- tcga[tcga$aluAnno=="yes", c("idMap", "idType", "Splice_Event")]
+    nmd <- tcga[tcga$repeatAnno=="yes", c("idMap", "idType", "Splice_Event")]
+  }
+  
+  asesighk.nmd <- merge(asesighk, nmd, by="idMap")
+  
+  ##
+  asesighk.nmd.stat <- asesighk.nmd %>% 
+    group_by(exps, aseType) %>% 
+    dplyr::summarise(freq=n()) %>% 
+    tidyr::spread(aseType, freq, fill=0)
+  names(asesighk.nmd.stat)[2:3] <- paste0("nmd", names(asesighk.nmd.stat)[2:3])
+
+  ## 
+  asesighk.rep <- merge(asesighk, rep, by="idMap")
+  asesighk.rep.stat <- asesighk.rep %>% 
+    group_by(exps, aseType) %>% 
+    dplyr::summarise(freq=n()) %>% 
+    tidyr::spread(aseType, freq, fill=0)
+  names(asesighk.rep.stat)[2:3] <- paste0("rep", names(asesighk.rep.stat)[2:3])
+  
+  asesighk.stat <- merge(asesighk.stat, asesighk.nmd.stat, by="exps", all.x=T)
+  asesighk.stat <- merge(asesighk.stat, asesighk.rep.stat, by="exps", all.x=T)
+
+  return(asesighk.stat)
+}
+
+
+asesighk01 <- readRDS(file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/encode/asesighk_diff01_fdr005_jc10.rds")
+
+## the number of nmd and nmd overlap with RE events in each experiment
+asesighk.stat01 <- aseStat(asesighk01, txAnno="nmd") 
+asesighk.select01 <- asesighk.stat01 %>% 
+  dplyr::filter(nmdsiga>=35 | nmdsigd>=35)
+
+## the number of alu and RE overlaped events in each experiment
+asesighk.alu.stat01 <- aseStat(asesighk01, txAnno="allalu")
+asesighk.alu.select01 <- asesighk.alu.stat01 %>% 
+  dplyr::filter(repsiga>=30 | repsigd>=30)
+
+aseStatPlot <- function(asesighk.select, width=6, prefix="", pct=F){
+  asesighk.select <- asesighk.select %>% 
+    dplyr::rename(siga=nmdsiga) %>% 
+    dplyr::mutate(nmdsiga=siga-repsiga,
+                  nmdsigd=nmdsigd-repsigd,
+                  cell=gsub("hepg2", "HepG2", gsub("k562", "K562", cell)),
+                  target=paste0(target, "_", cell),
+                  allsig=allsiga+allsigd) %>% 
+    dplyr::select(-allsiga, -allsigd) %>%
+    tidyr::gather(sigType, freq, -c(seq(4), 9)) %>% 
+    dplyr::mutate(type=gsub(".*(sig[a,d])", "\\1", sigType),
+                  freq=ifelse(type=="sigd", -freq, freq),
+                  pct=round(100*freq/allsig, 2)) %>% 
+    arrange(desc(siga), target, type, desc(sigType))
+  
+
+  level <- unique(asesighk.select$target)
+  xlabel <- limma::strsplit2(level, split="_")[,1]
+  asesighk.select$target <- factor(asesighk.select$target, levels = level)
+  colors <- ifelse(grepl("K562", level), "red4", "black")
+  
+  # dir.create("/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/encode/", recursive = T)
+  ggplot(asesighk.select, aes(target, freq, fill=sigType, colour=sigType)) + 
+    geom_bar(aes(x=target, fill=sigType),stat="identity", position="stack",width = 0.5, size=0.1)+
+    labs(x="",y="#DASEs", title = "") +
+    # scale_y_continuous(limits=c(-1,2),breaks = c(-1,0,1,2),position="left") +
+    scale_x_discrete(label=xlabel) +
+    scale_colour_manual(values = rep("black",7))+
+    scale_fill_manual(values = c("Salmon","Thistle3","DarkOrange","DodgerBlue","DarkOrange","Thistle3","Khaki3","lightgreen"))+
+    #coord_flip()+
+    theme_classic() +
+    # facet_grid(.~clusType,scales = "fixed") +
+    geom_hline(yintercept = 0, size = 0.1, color="black") +
+    # annotate("text", label = "Known",x=30.5,y=-65) +
+    # annotate("text", label = "Novel",x=30.5,y= 30) +
+    theme(axis.text.y= element_text(size=6,color="black"),
+          # axis.text.x= element_text(size=9,color="black",angle=90),
+          axis.text.x = ggtext::element_markdown(angle=45, hjust=1, size=7, color=colors), 
+          axis.line = element_line(size = 0.2,color = "black"),
+          axis.ticks = element_line(size = 0.1,color = "black"),
+          axis.title=element_text(size=6,color="black"),
+          legend.text=element_text(size=6,colour="black"),
+          legend.title=element_text(size=6,colour="black"),
+          legend.position="right",
+          legend.key.size = unit(3, "mm"),
+          strip.background = element_rect(color ="black",size = 0.1,fill = "white"),
+          strip.text = element_text(size=6,color ="black"),
+          panel.grid.major.y = element_line(color="black",size=0.1,linetype = "dotted")
+    )
+}
+aseStatPlot(asesighk.select01, width=7, prefix="diff01_fdr005_jc10", pct=T)
+aseStatPlot(asesighk.alu.select01, width=7, prefix="alu_diff01_fdr005_jc10", pct=T)
+```
+
+**5.2 the most regulated PCD-NMD AS events**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+asesighk01 <- readRDS(file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/encode/asesighk_diff01_fdr005_jc10.rds")
+asesignmd <- asesighk01 %>% 
+  dplyr::filter(txAnno=="PCD_NMD") %>% 
+  dplyr::select(idMap, GeneID, geneSymbol, chr, strand, spliceType, IncLevel1, IncLevel2, IncLevelDifference, PValue, FDR, 
+                exps, target, cell, idType, Splice_Event, txAnno, repeatAnno, aluAnno)
+
+
+####
+asesighk01.stat <- asesighk01 %>% 
+  dplyr::filter(txAnno=="PCD_NMD", spliceType=="ES") %>% 
+  dplyr::mutate(idType=ifelse(is.na(idType), paste0(Splice_Event, "(", geneSymbol,")"), idType),
+                cellASEtype=paste0(cell, "_", aseType)) %>% 
+  group_by(idType, cellASEtype) %>% 
+  summarise(freq=n()) %>% 
+  group_by(idType) %>% 
+  dplyr::mutate(all=sum(freq)) %>% 
+  arrange(desc(all))
+
+asesighk01.stat <- asesighk01.stat %>% 
+  dplyr::filter(idType %in% unique(asesighk01.stat$idType)[1:30]) %>% 
+  dplyr::mutate(freq=ifelse(grepl("k562", cellASEtype), -freq, freq)) %>% 
+  arrange(desc(all))
+
+
+# unique(tcga$idMap)
+asesighk01.stat <- asesighk01.stat %>% 
+  dplyr::mutate(idType=factor(idType, levels=unique(asesighk01.stat$idType)))
+
+
+ggplot(asesighk01.stat, aes(idType, freq, fill=cellASEtype, colour=cellASEtype)) + 
+  geom_bar(aes(x=idType, fill=cellASEtype),stat="identity", position="stack",width = 0.5, size=0.1)+
+  labs(x="",y="#RBPs", title = "") +
+  scale_colour_manual(values = rep("black",7))+
+  scale_fill_manual(values = c("Salmon","Thistle3","DarkOrange","DodgerBlue","DarkOrange","Thistle3","Khaki3","lightgreen"))+
+  theme_classic() +
+  geom_hline(yintercept = 0, size = 0.1, color="black") +
+  theme(axis.text.y= element_text(size=6,color="black"),
+        axis.text.x= element_text(size=7,color="black",angle=90),
+        axis.line = element_line(size = 0.2,color = "black"),
+        axis.ticks = element_line(size = 0.1,color = "black"),
+        axis.title=element_text(size=6,color="black"),
+        legend.text=element_text(size=6,colour="black"),
+        legend.title=element_text(size=6,colour="black"),
+        legend.position="right",
+        legend.key.size = unit(3, "mm"),
+        strip.background = element_rect(color ="black",size = 0.1,fill = "white"),
+        strip.text = element_text(size=6,color ="black"),
+        panel.grid.major.y = element_line(color="black",size=0.1,linetype = "dotted")
+  )
+
+```
+
+## 6. clinical value of pcd-nmd AS events in KIRC (related to figure 6)
+
+**6.1 gsva immune analysis & clustering**
+
+```{r include=TRUE, eval=FALSE, cache=TRUE, message=FALSE}
+library(GSVA)
+library(tidyverse)
+library(stringr)
+library(tidyr)
+library(dplyr)
+
+pan_exp <- read.table("/home/u1357/RNAseq/pancan/GDC-PANCAN.htseq_fpkm-uq.tsv",sep="\t",header=T,row.names=1)
+pan_exp <- as.matrix(pan_exp)
+
+immuset <- read.csv("/home/u1357/RNAseq/RCC/RCCsplicing/immune/immuset.csv",header=T,row.names = 1)
+imset <- immuset %>%
+  group_by(Cell.type) %>%
+  summarise(gene=list(Symbol)) %>%
+  deframe()
+
+gsva.cell <- gsva(pan_exp,imset,method="gsva",parallel.sz=8)
+gsva.cell <- data.frame(t(gsva.cell))
+write.csv(gsva.cell, file = "/home/u1357/RNAseq/RCC/biye/immune/panc_gsva_immune_cells.csv")
+
+
+
+## clustering
+library(ConsensusClusterPlus)
+
+ssgsea <- read.csv("/home/u1357/RNAseq/RCC/biye/immune/panc_gsva_immune_cells.csv",row.names=1)
+title = "/home/u1357/RNAseq/RCC/biye/immune/cluster/pan5gsva"
+d <- data.matrix(t(ssgsea))
+results = ConsensusClusterPlus(d,maxK=15,reps=100,pItem=0.8,pFeature=1,
+                               title=title,clusterAlg="km",distance="euclidean",seed=1262118388,plot="png")
+
+x3<-results[[3]][["consensusClass"]]
+x4<-results[[4]][["consensusClass"]]
+x5<-results[[5]][["consensusClass"]]
+x6<-results[[6]][["consensusClass"]]
+x7<-results[[7]][["consensusClass"]]
+x8<-results[[8]][["consensusClass"]]
+x9<-results[[9]][["consensusClass"]]
+x10<-results[[10]][["consensusClass"]]
+x11<-results[[11]][["consensusClass"]]
+x12<-results[[12]][["consensusClass"]]
+x13<-results[[13]][["consensusClass"]]
+x14<-results[[14]][["consensusClass"]]
+x15<-results[[15]][["consensusClass"]]
+
+z<-cbind(x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13,x14,x15)
+z <- data.frame(z)
+# write.csv(z,file="/home/u1357/RNAseq/RCC/biye/immune/cluster/pan5gsva/cluster_results.csv")
+```
+
+**6.2 plot clustering & psi difference**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+## kmeas consense
+clust <- read.csv("/home/u1357/RNAseq/RCC/biye/immune/cluster/pan5gsva/cluster_results.csv")
+clust <- clust[,c("X","x5")]
+names(clust) <- c("patientID","cluster")
+clust$cluster <- paste("C",clust$cluster,sep="")
+ssgsea <- read.csv("/home/u1357/RNAseq/RCC/biye/immune/panc_gsva_immune_cells.csv")
+names(ssgsea)[1] <-"patientID"
+ssgsea <- merge(ssgsea,clust,by="patientID")
+
+info <- read.table("/home/u1357/RNAseq/pancan/GDC-PANCAN.basic_phenotype.tsv",sep="\t",header=T)
+names(info)[1] <-"patientID"
+info <- info[info$program=="TCGA",]
+info$project_id <- gsub("TCGA-","",info$project_id)
+info <- info[info$project_id!="",c("patientID","project_id")]
+names(info)[2] <- "projectID"
+info$patientID <- gsub("-",".",info$patientID)
+
+ssgsea <- merge(ssgsea,info,by="patientID")
+ssgsea$patientID <- substr(ssgsea$patientID, 1, 15)
+
+ssgsea <- ssgsea[substr(ssgsea$patientID, 14, 15)!=11,]
+ssgsea <- ssgsea[!duplicated(ssgsea$patientID),]
+ssgsea <- ssgsea[order(ssgsea$cluster,ssgsea$projectID),]
+# ssgsea <- ssgsea[order(ssgsea$projectID,ssgsea$cluster),]
+
+
+ha1 = HeatmapAnnotation(
+  df = ssgsea[,c("cluster","projectID")],
+  col = list(
+    cluster = c(C1 = "DarkOrange", C2 = "Thistle3", C3 = "Salmon",C4 = "Khaki3", C5 = "red", C6 = "DodgerBlue",C7 = "lightgreen"),
+    projectID = c(ACC="lightblue",BLCA = "DodgerBlue", BRCA = "#030150", CESC = "#c4fdd7",CHOL="lightgreen", COAD="#66e591",DLBC="khaki3",ESCA="#14c850",GBM="#179240",
+                  HNSC = "Salmon", KICH = "orange", KIRC = "Red", KIRP = "#f8deaf",LAML="black",LGG="darkgreen",LIHC = "cyan", LUAD="blue",LUSC="purple",MESO = "yellow", OV="grey90",
+                  PAAD = "grey10", PCPG = "grey50", PRAD = "darkred",READ = "darkorange", SARC = "lightblue", SKCM = "red4",
+                  STAD = "gold", TGCT = "navy",THCA = "firebrick", THYM = "cyan2", UCEC = "purple3",UCS="khaki",UVM="purple3")
+  ),
+  annotation_name_side = "left",
+  show_legend = c(T,T),
+  simple_anno_size = unit(0.45, "cm"),
+  height = unit(2, "cm"),
+  gap = unit(0.3, "mm"))
+
+col_fun = colorRamp2(c(-1,-0.5,0,0.5,1), c("navy","blue","white","orange","red"))
+Heatmap(t(ssgsea[,2:27]),col = col_fun,cluster_rows=T,cluster_columns=F,row_title = NULL,column_title=NULL, 
+        show_row_names = T,row_names_side="left",show_column_names = F, use_raster = F, 
+        rect_gp = gpar(col = NA), show_column_dend = F,show_row_dend = F, show_heatmap_legend = F,top_annotation=ha1)
+
+
+```
+
+**6.3 nmd score (75% percentile PSI of AS events in a sample): data process**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+tcga <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/v2/result/tcga_ase_all_txAnno_repeatAnno.rds")
+nmd.ss <- tcga %>%
+  dplyr::filter(spliceType=="ES") %>% 
+  dplyr::filter(!is.na(idType)) %>%
+  dplyr::filter(txAnno=="PCD_NMD") 
+
+infoAllx <- readRDS(file="/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/clin/panc_info_pct75.rds")
+
+cancerType <- "KIRC"
+dataType <- "fit"
+survType <- "OS"
+psiNorm <- 1
+
+ct <- cancerType
+survX <- c("pvalHRfit", "cutfit", "sigFit")
+survX <- paste0(survX, survType)
+
+nmddf <- infoAllx %>% 
+    dplyr::select(Splice_Event, Splice_Type, AltExons_IsoName, SpliceIn_IsoName, SpliceOut_IsoName, Cancer_Type, PSI_Tumor, 
+                  PSI_Normal, PSI_Difference, FDR_Difference, sigDiff, all_of(survX)) %>% 
+    dplyr::rename(idType=Splice_Event, sigType=sigDiff, sigSurv=survX[3], cancerType=Cancer_Type) %>% 
+    dplyr::filter(cancerType==ct)  %>%
+    dplyr::filter(PSI_Normal <= psiNorm)
+  
+nmddf <- merge(nmddf, nmd.ss[,c("Splice_Event","idType", "repeatAnno", "aluAnno")], by="idType")
+nmdase <- nmddf$idType
+  
+dir1 <- "/home/u1357/RNAseq/pancan/spliceSeq/dataOne/dataPlot/"
+psi.kirc <- readRDS(paste0(dir1, "data_psi_", cancerType, ".rds"))
+psi.kirc.nmds <- psi.kirc[!grepl("Norm", row.names(psi.kirc)), nmdase]
+ql5 <- data.frame(t(apply(psi.kirc.nmds, 1, quantile, probs = seq (0.05, 0.95, by = 0.05), na.rm=T)))
+names(ql5) <- gsub("\\.", "", names(ql5))
+
+##
+dir2 <- "/home/u1357/RNAseq/pancan/webdata/spliceseq/newAdd/survdata/"
+load(paste0(dir2, "spliceseq_", dataType, "_data_", survType,"_", cancerType, ".Rdata"))
+idtypes <- row.names(ql5)[row.names(ql5)%in%row.names(mydata)]
+mydata <- cbind(mydata[idtypes,1:2], ql5[idtypes,])
+
+## survival analysis
+cutList <- list()
+for (i in 3:ncol(mydata)){
+      # i <- 10
+      cutList[[i]] <- survCut <- tryCatch(survminer::surv_cutpoint(mydata, time = "timeY", event = "event",variables = names(mydata)[i])$cutpoint$cutpoint,error = function(e) return(NA))
+      if (is.na(survCut)){
+        ## not used in subsequent analysis
+        mydata[,i] <- mydata[,i]
+      }else if(survCut==1){
+        mydata[,i] <- ifelse(mydata[,i] == 1,1,0)
+      }else{
+        mydata[,i] <- ifelse(mydata[,i] > survCut,1,0)
+      }
+}
+
+cutList <- data.frame(names(mydata)[3:ncol(mydata)], unlist(cutList))
+names(cutList) <- c("idType", dataType)
+row.names(cutList) <- cutList$idType
+## delete ASEs with 0-sample group
+stat = function(data) {
+  stat<- data.frame(t(data[0,]))
+  stat$low <- apply(data==0,2,sum,na.rm=T)
+  stat$high <- apply(data==1,2,sum,na.rm=T)
+  stat <- row.names(stat[stat$low==0 | stat$high==0,])
+  return(stat)
+}
+cutSt <- stat(mydata[,3:ncol(mydata)])
+cutStNA <- row.names(cutList[is.na(cutList[,dataType]),])
+mydata <- mydata[,!names(mydata)%in%cutSt & !names(mydata)%in%cutStNA]
+
+N <-length(mydata)
+pval <- hr <- n <- nData <- nEvent <- minGroup <- list()
+for(i in 3:N){
+  ## i <- 3
+  ## erro when HR is INF
+  cox <- tryCatch(survival::coxph(survival::Surv(timeY, event)~mydata[,i],data=mydata, ties="breslow"),error = function(e) return(NA))
+  hr[[i]] <- summary(cox)$coefficients[2] ## exp(coef)
+  nData[[i]] <- cox$n
+  nEvent[[i]] <- cox$nevent
+  
+  ## use log-rank test to calculate p-value
+  # pval[[i]] <- anova(cox)$Pr[2]
+  logrank <- tryCatch(survival::survdiff(survival::Surv(timeY, event)~mydata[,i],data=mydata),error = function(e) return(NA))
+  pval[[i]] <- 1 - pchisq(logrank$chisq, length(logrank$n) -1)
+  n[[i]] <- paste(logrank$obs[1],"/",logrank$n[1],"-",logrank$obs[2],"/",logrank$n[2],sep="")
+  minGroup[[i]] <- min(logrank$n[1], logrank$n[2])
+}
+ase <- names(mydata)[3:N]
+pval <- unlist(pval)
+hr <- unlist(hr)
+n <- unlist(n)
+nData <- unlist(nData)
+nEvent <- unlist(nEvent)
+minGroup <- unlist(minGroup)
+bh <- ifelse(is.na(pval),NA,p.adjust(pval,method = "BH",n = length(pval)))
+cutList <- cutList[ase,]
+
+result <- data.frame(cutList, pval, bh, hr, n, minGroup, nData, nEvent)
+names(result) <- c("idType","cut","pvalHR","bhHR","HR","nObsHR","nMinHR","nDataHR","nEventHR")
+names(result)[2:9] <- paste(names(result)[2:9], dataType, sep="")
+result <- na.omit(result) 
+save(result, mydata, file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/clin/result.Rdata")
+```
+
+**6.3 nmd score (75% percentile PSI of AS events in a sample): plot**
+
+```{r include=TRUE, eval=TRUE, cache=TRUE, message=FALSE}
+load(file = "/home/u1357/RNAseq/pancan/oncosplicingv3/analysis/clin/result.Rdata")
+ss.kirc.fit.os <- result %>% 
+    dplyr::mutate(percent = gsub("X", "", idType),
+                  cut = cutfit,
+                  pval = -log10(pvalHRfit),
+                  HR = HRfit)
+  
+ggplot(ss.kirc.fit.os, aes(percent, cut, fill=pval, colour = pval, size = HR)) +
+  geom_point(shape = 21, stroke=0.2, alpha=1, show.legend = T) +
+  theme_bw(base_size = 10) +
+  scale_fill_gradient2(high = "orange", low = "blue", midpoint = 6, mid = "purple") +
+  scale_colour_gradient2(high = "orange", low = "blue", midpoint = 6, mid = "purple") +
+  theme(title=element_text(size=8),
+        axis.text.x = element_text(size=8),
+        axis.text.y = element_text(size=8),
+        axis.title = element_text(size=8),
+        legend.title = element_text(size=8))
+  
+KMplot <- function(SpliceEvent){
+    ## plot survival
+    dataM <- mydata[,c("timeY","event",SpliceEvent)]
+    cut <- result[result$idType==SpliceEvent,2]
+    x <- survminer::surv_fit(survival::Surv(timeY, event) ~ dataM[,SpliceEvent], data=dataM)
+    if(cut==1){
+      lPSI  <- paste("PSI<",cut,"(n=", x$n[1], ")", sep = "")
+      hPSI  <- paste("PSI=",cut,"(n=", x$n[2], ")", sep = "") 
+    }else if(cut==0){
+      lPSI  <- paste("PSI=",cut,"(n=", x$n[1], ")", sep = "")
+      hPSI  <- paste("PSI>",cut,"(n=", x$n[2], ")", sep = "") 
+    }else{
+      lPSI  <- paste("PSI<=",cut,"(n=", x$n[1], ")", sep = "")
+      hPSI  <- paste("PSI>",cut,"(n=", x$n[2], ")", sep = "") 
+    }
+    
+    sdf <- survival::survdiff(survival::Surv(timeY, event) ~ dataM[,SpliceEvent], data=dataM)
+    pval <- 1 - pchisq(sdf$chisq, length(sdf$n) - 1)
+    pval<- format(pval, scientific = TRUE,digits = 3)
+    title=paste(cancerType,"-SpliceSeq\n",SpliceEvent,"\nLog-rank p = ",pval,sep="")
+    if(dataType=="med"){
+      lgtitle <- "Median cutoff"
+    }else{
+      lgtitle <- "Optimal cutoff"
+    }
+    
+    ##
+    # outdir <- paste0("/home/u1357/RNAseq/pancan/oncosplicingv3/v2/analysis/clin/nmdscore/", cancerType,"/", survType, "/", dataType, "/spliceseq/")
+    # dir.create(outdir, recursive = T)
+    # outFilePath <- paste0(outdir, paste(cancerType, dataType, survType, SpliceEvent, sep="_"), ".pdf")
+    # pdf(file = outFilePath, width=4, height=3, onefile = F)
+    p <- survminer::ggsurvplot(x, data=dataM, pval=F, palette=c("blue","red"),censor.shape="|", censor.size = 1.5,
+                    xlab="Years",ylab=survType, legend.labs =c(lPSI,hPSI),
+                    legend=c(0.8,1.13),legend.title = lgtitle, title=title,
+                    ggtheme = theme_classic() + 
+                      theme(title=element_text(size=9),
+                            legend.title = element_text(size=10),
+                            legend.text = element_text(size=9),
+                            axis.text = element_text(size=9,color="black"),
+                            axis.title = element_text(size=9,face="bold")))
+    print(p)
+    # dev.off()
+}
+KMplot("X75")
+
+```
